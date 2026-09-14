@@ -2,6 +2,29 @@ from . import __version__ as _version
 
 app_name = "webshop"
 app_title = "Webshop"
+
+# PR-Foundry/framework#165 (fork patch) — frappe v16 replaced the Desktop Icon grid
+# with the `Apps` screen (`Desktop Settings.desktop_page`, default `Apps`), which is
+# drawn ONLY from this hook. webshop declares none upstream, so its public `Webshop`
+# workspace lost its only entry point: the Link-type Desktop Icon client_app seeds
+# (framework bug-029/#038) still exists and is not hidden, but nothing renders it.
+#
+# It must live HERE, not in client_app: frappe/boot.py iterates
+# `for app_name in frappe.get_active_apps()` and reads each app's OWN hook, so
+# declaring it elsewhere would spend that app's tile slot on a tile labelled Webshop.
+#
+# `/desk/webshop` resolves because the public `Webshop` workspace supplies that slug;
+# a `/desk/*` route without a matching workspace is a blank flicker with no Error Log
+# row (framework#139 / bug-196). No `logo` key — webshop ships no brand asset, so boot
+# falls back to the default rather than borrowing another app's mark.
+# Upstream-owned line — re-verify after any webshop sync.
+add_to_apps_screen = [
+	{
+		"name": "webshop",
+		"title": app_title,
+		"route": "/desk/webshop",
+	}
+]
 app_publisher = "Frappe Technologies Pvt. Ltd."
 app_description = "Open Source eCommerce Platform"
 app_email = "contact@frappe.io"
