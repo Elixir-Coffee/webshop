@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright (c) 2021, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
@@ -6,9 +7,9 @@ import json
 import frappe
 from frappe.utils import cint
 
-from webshop.webshop.doctype.override_doctype.item_group import get_child_groups_for_website
 from webshop.webshop.product_data_engine.filters import ProductFiltersBuilder
 from webshop.webshop.product_data_engine.query import ProductQuery
+from webshop.webshop.doctype.override_doctype.item_group import get_child_groups_for_website
 
 
 @frappe.whitelist(allow_guest=True)

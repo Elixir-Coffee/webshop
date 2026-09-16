@@ -1,64 +1,21 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+**/__pycache__
+*.egg-info
 *.pyc
 *.py~
-
-# Distribution / packaging
-.Python
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-tags
-MANIFEST
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Dependency directories
-node_modules/
-jspm_packages/
-
-# IDEs and editors
-.vscode/
-.vs/
-.idea/
-.kdev4/
-*.kdev4
-*.DS_Store
-*.swp
 *.swo
-*.comp.js
+*.swp
+*~
+.DS_Store
+.backportrc.json
+.idea/
+.vscode/
 .wnf-lang-status
-*debug.log
-
-# Helix Editor
-.helix/
-
-# Aider AI Chat
-.aider*
-
-# App specific
+__pycache__
 conf.py
-locale
-latest_updates.json
+dist/
 webshop/docs/current
 webshop/public/dist
-.backportrc.json
+latest_updates.json
+locale
+node_modules/
+tags
