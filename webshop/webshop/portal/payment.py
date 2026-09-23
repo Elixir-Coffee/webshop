@@ -38,7 +38,7 @@ from erpnext.accounts.doctype.payment_request.payment_request import (
     make_payment_request,
 )
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import flt, validate_email_address
 
 # erpnext decides the Payment Request direction from exactly these two doctypes
 # ("payment_request_type = 'Outward' if args.get('dt') in ['Purchase Order', 'Purchase Invoice']").
@@ -87,6 +87,57 @@ def is_payable(doc) -> bool:
 def _party_for(doc) -> tuple[str, str | None]:
     party_type = "Supplier" if doc.doctype in _SUPPLIER_SIDE_DOCTYPES else "Customer"
     return party_type, doc.get(party_type.lower())
+
+
+def _valid_email(value) -> str | None:
+    """Return ``value`` if it is a real email address, else ``None``.
+
+    Delegates to frappe's own validator rather than testing for ``"@"``, so a login that
+    merely contains one cannot pass for an address.
+    """
+    return validate_email_address((value or "").strip(), throw=False) or None
+
+
+def _party_contact_email(doc) -> str | None:
+    """The email on the document's contact person, else the party's default contact."""
+    from frappe.contacts.doctype.contact.contact import get_default_contact
+
+    party_type, party = _party_for(doc)
+    if not party:
+        return None
+    contact = doc.get("contact_person") or get_default_contact(party_type, party)
+    if not contact:
+        return None
+    return frappe.db.get_value("Contact", contact, "email_id")
+
+
+def _payer_email(doc, session_user: str) -> str | None:
+    """Resolve the buyer's email from the DOCUMENT, never from whoever owns the row.
+
+    erpnext falls back to ``ref_doc.owner`` when no ``recipient_id`` is supplied
+    (``payment_request.py:930``). Since upstream webshop ``80588995e0`` -- named, exactly,
+    "create sales transactions as Admin" -- ``place_order`` submits the cart Quotation inside
+    ``system_permissions()``, so a portal order is owned by **Administrator** and that fallback
+    yields the literal string ``"Administrator"``. PayFast rejects it with a 400; a gateway
+    that does not validate simply records a non-address as the payer. PR-Foundry/framework#225.
+
+    It only ever worked because the owner happened to be a login shaped like an email. On a
+    site whose usernames are not addresses it has been wrong since this code was written.
+
+    Resolution order -- the document first, the caller's identity only as a last resort:
+
+    1. ``contact_email``: the address the order was actually placed with;
+    2. the contact person's / party's default contact email;
+    3. the caller's own login, and only when it is a real address.
+
+    Step 3 is why this MUST be called **before** any elevation: read after
+    ``frappe.set_user("Administrator")`` it would reproduce the defect exactly.
+    """
+    for candidate in (doc.get("contact_email"), _party_contact_email(doc), session_user):
+        email = _valid_email(candidate)
+        if email:
+            return email
+    return None
 
 
 @frappe.whitelist()  # login required (NOT allow_guest); Guest is also rejected explicitly below
@@ -144,6 +195,19 @@ def pay_for_document(dt: str, dn: str):
 
     party_type, party = _party_for(doc)
 
+    # Resolved BEFORE elevation -- see _payer_email. Passing it as recipient_id is what stops
+    # erpnext falling back to ref_doc.owner, which on a portal order is "Administrator"
+    # (framework#225).
+    payer_email = _payer_email(doc, frappe.session.user)
+    if not payer_email:
+        # Refuse rather than proceed: recipient_id=None falls straight back to the owner, and
+        # email_to is also the payment-request email recipient (payment_request.py:647). A
+        # refusal the customer can report beats a 400 at the gateway with nothing logged here.
+        frappe.throw(
+            _("We do not have an email address for this order. Please contact us to arrange payment."),
+            frappe.ValidationError,
+        )
+
     # Elevate ONLY after the ownership gate above passed.
     original_user = frappe.session.user
     try:
@@ -155,6 +219,7 @@ def pay_for_document(dt: str, dn: str):
             order_type="Shopping Cart",
             party_type=party_type,
             party=party,
+            recipient_id=payer_email,
         )
     finally:
         frappe.set_user(original_user)
