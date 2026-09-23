@@ -126,11 +126,16 @@ webshop.checkout_address = {
 			},
 			{ fieldname: "col", fieldtype: "Column Break" },
 			{
+				// The label carries frappe's own `reqd` marker class
+				// (.control-label.reqd:after in controls.scss) so the asterisk matches the
+				// real fields exactly instead of being a hand-drawn imitation beside them.
+				// The field IS required -- the server refuses an address with no number --
+				// and a required field that does not look required is a form that lies.
 				fieldname: "wsa_phone",
 				fieldtype: "HTML",
 				options: `
 					<div class="form-group">
-						<label class="control-label" for="wsa-phone-input">${__("Mobile number")}</label>
+						<label class="control-label reqd" for="wsa-phone-input">${__("Mobile number")}</label>
 						<input type="tel" id="wsa-phone-input" class="form-control wsa-phone-input"
 							autocomplete="tel">
 						<div class="small text-muted mt-1">${__(
@@ -183,14 +188,128 @@ webshop.checkout_address = {
 		webshop.checkout_address._dialog = d;
 		webshop.checkout_address._vendorOk = vendorOk;
 		webshop.checkout_address.attachPhone(d, vendorOk);
-		// Task 6 attaches the address lookup here.
+		webshop.checkout_address.attachLookup(d);
 		$(document).trigger("webshop:address-form-shown", [d, { vendorOk, addressType }]);
+	},
+
+	// -- address lookup ------------------------------------------------------------------
+	//
+	// Google Places. NEVER a gate: with no key, a blocked script, an offline customer or an
+	// API error, every field stays manually editable and the form submits exactly as it did
+	// before. A checkout that cannot complete because a third party is down would be a worse
+	// defect than the typing this saves.
+	//
+	// Uses PlaceAutocompleteElement, not google.maps.places.Autocomplete. The legacy Places
+	// service "will not be available in new Cloud projects" (Google's deprecation page,
+	// transition 1 March 2025), so the widget most examples still show cannot work for a key
+	// issued today.
+
+	async loadPlaces() {
+		if (window.google && window.google.maps && window.google.maps.importLibrary) return true;
+		const r = await frappe.call("webshop.webshop.maps.get_places_key");
+		const key = r && r.message;
+		if (!key) return false;
+		await webshop.checkout_address.loadScript(
+			"https://maps.googleapis.com/maps/api/js?" +
+				$.param({ key, v: "weekly", libraries: "places", loading: "async" }),
+		);
+		return !!(window.google && window.google.maps && window.google.maps.importLibrary);
+	},
+
+	async attachLookup(d) {
+		const host = d.$wrapper.find(".wsa-lookup")[0];
+		if (!host) return;
+		let ok = false;
+		try {
+			ok = await webshop.checkout_address.loadPlaces();
+		} catch (e) {
+			console.warn("checkout address: place lookup unavailable, enter manually", e);
+		}
+		if (!ok) return;
+
+		try {
+			const { PlaceAutocompleteElement } = await google.maps.importLibrary("places");
+			const el = new PlaceAutocompleteElement();
+			el.style.width = "100%";
+			host.appendChild(el);
+
+			// Both names are bound deliberately: the event was gmp-placeselect while the
+			// element was in beta and gmp-select at GA. Binding one and guessing wrong is a
+			// lookup that renders, accepts a click, and does nothing.
+			const onSelect = async (event) => {
+				try {
+					const prediction = event.placePrediction || (event.detail || {}).placePrediction;
+					if (!prediction) return;
+					const place = prediction.toPlace();
+					await place.fetchFields({
+						fields: ["addressComponents", "location", "id", "formattedAddress"],
+					});
+					webshop.checkout_address.applyPlace(d, place);
+				} catch (e) {
+					console.warn("checkout address: could not read the selected place", e);
+				}
+			};
+			el.addEventListener("gmp-select", onSelect);
+			el.addEventListener("gmp-placeselect", onSelect);
+		} catch (e) {
+			console.warn("checkout address: place lookup could not start", e);
+		}
+	},
+
+	// Google's component types -> Address fields.
+	applyPlace(d, place) {
+		const part = (type, prefer) => {
+			const c = (place.addressComponents || []).find(
+				(x) => (x.types || []).indexOf(type) !== -1,
+			);
+			if (!c) return "";
+			return (prefer === "short" ? c.shortText : c.longText) || c.longText || "";
+		};
+
+		const line1 = [part("street_number"), part("route")].filter(Boolean).join(" ");
+		// postal_town covers the UK, where locality is often absent.
+		const city = part("locality") || part("postal_town") || part("administrative_area_level_2");
+		const suburb = part("sublocality_level_1") || part("sublocality") || part("neighborhood");
+
+		const set = (fieldname, value) => {
+			if (value) d.set_value(fieldname, value);
+		};
+		set("address_line1", line1 || place.formattedAddress);
+		set("address_line2", suburb);
+		set("city", city);
+		set("state", part("administrative_area_level_1"));
+		set("country", part("country"));
+		set("pincode", part("postal_code"));
+
+		const loc = place.location;
+		if (loc) {
+			webshop.checkout_address._geo = {
+				latitude: typeof loc.lat === "function" ? loc.lat() : loc.lat,
+				longitude: typeof loc.lng === "function" ? loc.lng() : loc.lng,
+				place_id: place.id || "",
+			};
+		}
+
+		// A place with no postal code is common for rural addresses, and the postal code is
+		// what decides courier serviceability -- so ask for it rather than leaving a silent
+		// blank that fails later and less legibly.
+		if (!part("postal_code")) {
+			const $pin = d.get_field("pincode").$input;
+			if ($pin && $pin.length) {
+				$pin.focus();
+				frappe.show_alert({
+					message: __("Please add the postal code — we could not find one for that address."),
+					indicator: "orange",
+				});
+			}
+		}
 	},
 
 	// -- phone ---------------------------------------------------------------------------
 
 	attachPhone(d, vendorOk) {
 		webshop.checkout_address._iti = null;
+		webshop.checkout_address._geo = null;
 		const input = d.$wrapper.find(".wsa-phone-input")[0];
 		if (!input) return;
 
@@ -248,6 +367,15 @@ webshop.checkout_address = {
 		const phone = webshop.checkout_address.phoneValue(d);
 		if (phone.error) return;
 		values.phone = phone.number;
+
+		// Coordinates ride along when a place was picked. Absent for a hand-typed address,
+		// which is allowed -- L2D needs them, locker collection does not.
+		const geo = webshop.checkout_address._geo;
+		if (geo) {
+			values.custom_latitude = geo.latitude;
+			values.custom_longitude = geo.longitude;
+			values.custom_place_id = geo.place_id;
+		}
 
 		d.get_primary_btn().prop("disabled", true);
 		frappe
