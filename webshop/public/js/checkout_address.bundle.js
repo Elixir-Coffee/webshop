@@ -182,11 +182,73 @@ webshop.checkout_address = {
 		d.show();
 		webshop.checkout_address._dialog = d;
 		webshop.checkout_address._vendorOk = vendorOk;
-		// Tasks 5 and 6 attach the phone widget and the address lookup here.
+		webshop.checkout_address.attachPhone(d, vendorOk);
+		// Task 6 attaches the address lookup here.
 		$(document).trigger("webshop:address-form-shown", [d, { vendorOk, addressType }]);
 	},
 
+	// -- phone ---------------------------------------------------------------------------
+
+	attachPhone(d, vendorOk) {
+		webshop.checkout_address._iti = null;
+		const input = d.$wrapper.find(".wsa-phone-input")[0];
+		if (!input) return;
+
+		// No widget is a degraded form, not a broken one: the input stays a plain tel
+		// field, whatever is typed goes to the server, and the server refuses anything
+		// that is not E.164 with a message naming the format.
+		if (!vendorOk || typeof window.intlTelInput !== "function") return;
+
+		webshop.checkout_address._iti = window.intlTelInput(input, {
+			// A default, not a restriction -- every country stays selectable. The shop is
+			// South African, so that is where an unprompted customer most likely is.
+			initialCountry: "za",
+			countryOrder: ["za"],
+			// Shows the dial code beside the flag rather than inside the input, so what the
+			// customer types is their own number as they know it.
+			separateDialCode: true,
+			// Rejects characters and lengths that cannot belong to the chosen country while
+			// typing, rather than only at submit.
+			strictMode: true,
+		});
+
+		// Options verified present in the vendored 29.5.2 build. nationalMode,
+		// preferredCountries and autoPlaceholder are NOT in this major and would be
+		// silently ignored if passed.
+
+		d.$wrapper.find(".wsa-phone-input").on("input", () => {
+			d.$wrapper.find(".wsa-phone-error").attr("hidden", true);
+		});
+
+		d.$wrapper.on("hide.bs.modal", () => {
+			const iti = webshop.checkout_address._iti;
+			if (iti && typeof iti.destroy === "function") iti.destroy();
+			webshop.checkout_address._iti = null;
+		});
+	},
+
+	// What to send as `phone`, or an error to show. E.164 always: one canonical shape in
+	// the database, carrier-specific formatting where a carrier is actually called.
+	phoneValue(d) {
+		const iti = webshop.checkout_address._iti;
+		const $error = d.$wrapper.find(".wsa-phone-error");
+		if (!iti) {
+			return { number: (d.$wrapper.find(".wsa-phone-input").val() || "").trim() };
+		}
+		if (!iti.isValidNumber()) {
+			$error.text(__("Enter a valid mobile number for the country shown.")).removeAttr("hidden");
+			return { error: true };
+		}
+		$error.attr("hidden", true);
+		return { number: iti.getNumber() };
+	},
+
 	submit(d, values) {
+		// The phone is an HTML field, so frappe's `values` does not carry it.
+		const phone = webshop.checkout_address.phoneValue(d);
+		if (phone.error) return;
+		values.phone = phone.number;
+
 		d.get_primary_btn().prop("disabled", true);
 		frappe
 			.call("webshop.webshop.shopping_cart.cart.add_new_address", { doc: values })

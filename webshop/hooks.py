@@ -100,3 +100,12 @@ has_website_permission = {
 	"Website Item": "webshop.webshop.doctype.website_item.website_item.has_website_permission_for_website_item",
 	"Item Group": "webshop.webshop.doctype.website_item.website_item.has_website_permission_for_item_group",
 }
+
+
+# The checkout address form validates the phone server-side. Registered as an override
+# rather than by editing shopping_cart/cart.py: this app is an upstream fork, and the
+# override keeps the patch surface in upstream-owned files at zero. Guarded by
+# client_app.tests.test_checkout_address_phone.
+override_whitelisted_methods = {
+	"webshop.webshop.shopping_cart.cart.add_new_address": "webshop.webshop.checkout_address.add_new_address",
+}
