@@ -2,6 +2,12 @@
 
 PR-Foundry fork addition (checkout address form design, 2026-09-24). Upstream webshop has
 no file of this name, so it cannot conflict on a sync.
+
+Deliberately a top-level module and NOT ``webshop/webshop/api/maps.py``: upstream already
+ships ``webshop/webshop/api.py``, and adding an ``api/`` package next to it makes Python
+resolve the package and silently hide the module. That took out
+``webshop.webshop.api.get_guest_redirect_on_action`` and broke guest add-to-cart. Guarded by
+``client_app.tests.test_places_key.TestUpstreamApiModuleIsNotShadowed``.
 """
 
 import frappe
