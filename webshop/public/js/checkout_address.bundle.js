@@ -204,33 +204,89 @@ webshop.checkout_address = {
 	// transition 1 March 2025), so the widget most examples still show cannot work for a key
 	// issued today.
 
+	// Resolves true once `test()` does, or false after `timeoutMs`. Bounded on purpose:
+	// an unbounded wait on a third party is a checkout that hangs.
+	waitFor(test, timeoutMs) {
+		return new Promise((resolve) => {
+			const started = Date.now();
+			(function poll() {
+				if (test()) return resolve(true);
+				if (Date.now() - started > timeoutMs) return resolve(false);
+				setTimeout(poll, 50);
+			})();
+		});
+	},
+
 	async loadPlaces() {
+		// Fetched even when Google is already loaded: the region list is configuration and
+		// can change between opens, while the script is loaded once per page.
+		const r = await frappe.call("webshop.webshop.maps.get_address_search_config");
+		const cfg = (r && r.message) || {};
+		webshop.checkout_address._regions = cfg.region_codes || [];
 		if (window.google && window.google.maps && window.google.maps.importLibrary) return true;
-		const r = await frappe.call("webshop.webshop.maps.get_places_key");
-		const key = r && r.message;
+		const key = cfg.key;
 		if (!key) return false;
 		await webshop.checkout_address.loadScript(
 			"https://maps.googleapis.com/maps/api/js?" +
 				$.param({ key, v: "weekly", libraries: "places", loading: "async" }),
 		);
-		return !!(window.google && window.google.maps && window.google.maps.importLibrary);
+		// The loading=async bootstrap finishes defining google.maps.importLibrary AFTER the
+		// outer script's load event, so testing for it immediately is a race -- and one that
+		// loses the first time and wins afterwards, which is the worst shape. Observed on a
+		// clean browser with no extensions: the first open said "unavailable", closing and
+		// reopening showed the search box, because by then Google had finished and the
+		// early-return at the top of this function found it already there.
+		return await webshop.checkout_address.waitFor(
+			() => window.google && window.google.maps && window.google.maps.importLibrary,
+			8000,
+		);
+	},
+
+	// Says why the search box is absent instead of leaving a blank space. A silent
+	// fallback is how a broken integration looks exactly like one that was never
+	// configured, and the customer is left wondering whether to wait or start typing.
+	lookupUnavailable(host, reason) {
+		if (!host) return;
+		const note = document.createElement("div");
+		note.className = "small text-muted mb-2 wsa-lookup-note";
+		note.textContent = __("Address search is unavailable — please enter your address below.");
+		if (reason) note.title = String(reason).slice(0, 200);
+		host.appendChild(note);
 	},
 
 	async attachLookup(d) {
 		const host = d.$wrapper.find(".wsa-lookup")[0];
 		if (!host) return;
 		let ok = false;
+		let why = null;
 		try {
 			ok = await webshop.checkout_address.loadPlaces();
+			if (!ok) why = "no API key configured";
 		} catch (e) {
+			why = e;
 			console.warn("checkout address: place lookup unavailable, enter manually", e);
 		}
-		if (!ok) return;
+		if (!ok) {
+			webshop.checkout_address.lookupUnavailable(host, why);
+			return;
+		}
 
 		try {
 			const { PlaceAutocompleteElement } = await google.maps.importLibrary("places");
-			const el = new PlaceAutocompleteElement();
+			// Empty means worldwide -- Google's own semantics, so an unrestricted shop
+			// passes nothing rather than a sentinel. Set in the constructor because the
+			// element reads it when it builds its request.
+			const regions = webshop.checkout_address._regions || [];
+			const el = new PlaceAutocompleteElement(
+				regions.length ? { includedRegionCodes: regions } : {},
+			);
 			el.style.width = "100%";
+			// The element renders its controls inside a shadow root, which follows the
+			// BROWSER's colour preference rather than the page's. On a light storefront in
+			// a dark-preferring browser that is a black box -- observed. Pinning the scheme
+			// on the host is what reaches inside the shadow root; a background on the host
+			// alone does not.
+			el.style.colorScheme = "light";
 			host.appendChild(el);
 
 			// Both names are bound deliberately: the event was gmp-placeselect while the
@@ -252,7 +308,11 @@ webshop.checkout_address = {
 			el.addEventListener("gmp-select", onSelect);
 			el.addEventListener("gmp-placeselect", onSelect);
 		} catch (e) {
+			// Google reports a bad key, a disabled API, a blocked referrer or missing
+			// billing by THROWING here, so this is the branch that fires when the Cloud
+			// project is misconfigured -- the most likely reason the box never appears.
 			console.warn("checkout address: place lookup could not start", e);
+			webshop.checkout_address.lookupUnavailable(host, e);
 		}
 	},
 

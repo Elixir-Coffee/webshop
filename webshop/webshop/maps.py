@@ -33,3 +33,33 @@ def get_places_key() -> str | None:
 	if not settings.enable:
 		return None
 	return (settings.api_key or "").strip() or None
+
+
+@frappe.whitelist(allow_guest=True)
+def get_address_search_config() -> dict:
+	"""Everything the checkout address search needs, in one round trip.
+
+	``region_codes`` are CLDR two-letter codes for Google's ``includedRegionCodes``. An
+	empty list means no restriction -- Google's own semantics and the shop's default.
+
+	``Country.code`` is already lowercase ISO 3166-1 alpha-2, which is what CLDR region
+	codes are, so nothing maps between them. A country carrying no code is skipped rather
+	than sent as an empty string, which Google would reject for the whole request and take
+	the other countries down with it.
+	"""
+	from webshop.webshop.setup.address_search import FIELDNAME, MAX_REGION_CODES
+
+	selected = frappe.get_cached_doc("Webshop Settings").get(FIELDNAME) or []
+	codes = []
+	for row in selected:
+		code = (frappe.db.get_value("Country", row.country, "code") or "").strip().lower()
+		if code:
+			codes.append(code)
+
+	return {
+		"key": get_places_key(),
+		# Bounded here as well as at save. The save guard can be bypassed by a direct
+		# db write, and one country too many makes Google reject the request entirely --
+		# so the checkout degrades to unrestricted rather than to no search at all.
+		"region_codes": codes[:MAX_REGION_CODES],
+	}
