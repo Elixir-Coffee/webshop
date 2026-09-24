@@ -38,7 +38,7 @@ web_include_css = "webshop-web.bundle.css"
 # checkout_address.bundle.js replaces the native New Address dialog by rebinding
 # .btn-new-address -- see the bundle's own header and
 # client_app.tests.test_checkout_address_seam.
-web_include_js = ["web.bundle.js", "checkout_address.bundle.js"]
+web_include_js = ["web.bundle.js", "checkout_address.bundle.js", "portal_shipping.bundle.js"]
 
 after_install = "webshop.setup.install.after_install"
 on_logout = "webshop.webshop.shopping_cart.utils.clear_cart_count"
